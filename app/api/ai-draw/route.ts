@@ -17,10 +17,11 @@ export async function POST(req: NextRequest) {
   let imageUrl = ''
   try {
     const response = await openai.images.generate({
-      model: 'dall-e-2',
+      model: 'dall-e-3',
       prompt: DRAW_PROMPT(word),
       n: 1,
-      size: '512x512',
+      size: '1024x1024',
+      quality: 'standard',
     })
     imageUrl = response.data?.[0]?.url ?? ''
     if (!imageUrl) throw new Error('빈 응답')
