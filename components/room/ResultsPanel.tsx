@@ -48,7 +48,7 @@ export default function ResultsPanel({ roomId, roomCode, turns, players, current
       const res = await fetch('/api/rooms/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId }),
+        body: JSON.stringify({ roomId, userId: currentUserId }),
       })
       if (!res.ok) throw new Error()
       router.refresh()

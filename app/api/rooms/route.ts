@@ -1,44 +1,33 @@
-import { createClient } from '@/lib/supabase-server'
+import { createAdminClient } from '@/lib/supabase-admin'
 import { generateRoomCode } from '@/lib/game-utils'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { userId, nickname } = await req.json()
+    if (!userId || !nickname) return NextResponse.json({ error: 'userId, nickname 필요' }, { status: 400 })
 
-    const { nickname } = await req.json()
+    const supabase = createAdminClient()
 
-    // Generate unique room code
     let code = generateRoomCode()
-    let attempts = 0
-    while (attempts < 10) {
+    for (let i = 0; i < 10; i++) {
       const { data } = await supabase.from('rooms').select('id').eq('code', code).single()
       if (!data) break
       code = generateRoomCode()
-      attempts++
     }
 
-    // Create room
     const { data: room, error: roomError } = await supabase
       .from('rooms')
-      .insert({ code, host_id: user.id, status: 'waiting' })
+      .insert({ code, host_id: userId, status: 'waiting' })
       .select()
       .single()
 
     if (roomError) throw roomError
 
-    // Update user nickname if provided
-    if (nickname) {
-      await supabase.from('users').update({ nickname }).eq('id', user.id)
-    }
-
-    // Add host as player
     const { error: playerError } = await supabase.from('room_players').insert({
       room_id: room.id,
-      user_id: user.id,
-      nickname: nickname || user.email?.split('@')[0] || 'Player',
+      user_id: userId,
+      nickname,
       turn_order: 0,
       is_host: true,
     })

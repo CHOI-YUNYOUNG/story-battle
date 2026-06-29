@@ -1,23 +1,19 @@
-import { createClient } from '@/lib/supabase-server'
+import { createAdminClient } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { roomId, userId } = await req.json()
+    const supabase = createAdminClient()
 
-    const { roomId } = await req.json()
-
-    // Verify host
     const { data: room } = await supabase
       .from('rooms')
       .select('*')
       .eq('id', roomId)
-      .eq('host_id', user.id)
+      .eq('host_id', userId)
       .single()
 
-    if (!room) return NextResponse.json({ error: '권한 없음' }, { status: 403 })
+    if (!room) return NextResponse.json({ error: '방장만 시작할 수 있습니다' }, { status: 403 })
 
     const { count } = await supabase
       .from('room_players')
@@ -26,11 +22,7 @@ export async function POST(req: NextRequest) {
 
     if ((count ?? 0) < 2) return NextResponse.json({ error: '최소 2명이 필요합니다' }, { status: 400 })
 
-    const { error } = await supabase
-      .from('rooms')
-      .update({ status: 'playing' })
-      .eq('id', roomId)
-
+    const { error } = await supabase.from('rooms').update({ status: 'playing' }).eq('id', roomId)
     if (error) throw error
 
     return NextResponse.json({ success: true })

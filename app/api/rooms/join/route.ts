@@ -1,15 +1,13 @@
-import { createClient } from '@/lib/supabase-server'
+import { createAdminClient } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { code, userId, nickname } = await req.json()
+    if (!userId || !nickname || !code) return NextResponse.json({ error: '필수값 누락' }, { status: 400 })
 
-    const { code, nickname } = await req.json()
+    const supabase = createAdminClient()
 
-    // Find room
     const { data: room, error: roomError } = await supabase
       .from('rooms')
       .select('*')
@@ -19,39 +17,28 @@ export async function POST(req: NextRequest) {
     if (roomError || !room) return NextResponse.json({ error: '방을 찾을 수 없습니다' }, { status: 404 })
     if (room.status !== 'waiting') return NextResponse.json({ error: '이미 게임이 시작된 방입니다' }, { status: 400 })
 
-    // Check player count
     const { count } = await supabase
       .from('room_players')
       .select('*', { count: 'exact' })
       .eq('room_id', room.id)
 
-    if ((count ?? 0) >= 6) return NextResponse.json({ error: '방이 가득 찼습니다' }, { status: 400 })
+    if ((count ?? 0) >= 6) return NextResponse.json({ error: '방이 가득 찼습니다 (최대 6명)' }, { status: 400 })
 
-    // Check if already in room
+    // 이미 입장해 있으면 바로 반환
     const { data: existing } = await supabase
       .from('room_players')
       .select('id')
       .eq('room_id', room.id)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .single()
 
     if (existing) return NextResponse.json({ room })
 
-    // Get current player count for turn order
-    const { count: playerCount } = await supabase
-      .from('room_players')
-      .select('*', { count: 'exact' })
-      .eq('room_id', room.id)
-
-    if (nickname) {
-      await supabase.from('users').update({ nickname }).eq('id', user.id)
-    }
-
     const { error: playerError } = await supabase.from('room_players').insert({
       room_id: room.id,
-      user_id: user.id,
-      nickname: nickname || user.email?.split('@')[0] || 'Player',
-      turn_order: playerCount ?? 0,
+      user_id: userId,
+      nickname,
+      turn_order: count ?? 0,
       is_host: false,
     })
 

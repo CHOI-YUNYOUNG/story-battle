@@ -10,11 +10,12 @@ import type { Room, RoomPlayer, StoryTurn } from '@/types'
 interface RoomClientProps {
   initialRoom: Room
   currentUserId: string
+  nickname: string
 }
 
 type Phase = 'waiting' | 'playing' | 'revealing' | 'results'
 
-export default function RoomClient({ initialRoom, currentUserId }: RoomClientProps) {
+export default function RoomClient({ initialRoom, currentUserId, nickname }: RoomClientProps) {
   const [room, setRoom] = useState<Room>(initialRoom)
   const [players, setPlayers] = useState<RoomPlayer[]>([])
   const [turns, setTurns] = useState<StoryTurn[]>([])
@@ -27,19 +28,15 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
 
   const fetchPlayers = useCallback(async () => {
     const { data } = await supabase
-      .from('room_players')
-      .select('*')
-      .eq('room_id', initialRoom.id)
-      .order('turn_order')
+      .from('room_players').select('*')
+      .eq('room_id', initialRoom.id).order('turn_order')
     if (data) setPlayers(data)
   }, [supabase, initialRoom.id])
 
   const fetchTurns = useCallback(async () => {
     const { data } = await supabase
-      .from('story_turns')
-      .select('*')
-      .eq('room_id', initialRoom.id)
-      .order('turn_number')
+      .from('story_turns').select('*')
+      .eq('room_id', initialRoom.id).order('turn_number')
     if (data) setTurns(data)
   }, [supabase, initialRoom.id])
 
@@ -49,73 +46,40 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
 
     const channel = supabase
       .channel(`room-meta-${initialRoom.id}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'rooms',
-        filter: `id=eq.${initialRoom.id}`,
-      }, (payload) => {
-        const updated = payload.new as Room
-        setRoom(updated)
-        if (updated.status === 'waiting') {
-          // 방 리셋 → 대기실로
-          setTurns([])
-          setPhase('waiting')
-        }
-        if (updated.status === 'playing') setPhase('playing')
-        if (updated.status === 'finished') {
-          fetchTurns().then(() => setPhase('results'))
-        }
-      })
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'room_players',
-        filter: `room_id=eq.${initialRoom.id}`,
-      }, fetchPlayers)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${initialRoom.id}` },
+        (payload) => {
+          const updated = payload.new as Room
+          setRoom(updated)
+          if (updated.status === 'waiting') { setTurns([]); setPhase('waiting') }
+          if (updated.status === 'playing') setPhase('playing')
+          if (updated.status === 'finished') fetchTurns().then(() => setPhase('results'))
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_players', filter: `room_id=eq.${initialRoom.id}` },
+        fetchPlayers)
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
   }, [initialRoom.id, supabase, fetchPlayers, fetchTurns])
 
   const handleGameEnd = useCallback(async () => {
-    await fetchTurns()
-    await supabase
-      .from('story_turns')
-      .update({ is_visible: true })
-      .eq('room_id', initialRoom.id)
-
-    await supabase
-      .from('rooms')
-      .update({ status: 'finished' })
-      .eq('id', initialRoom.id)
-
+    const { data } = await supabase.from('story_turns').select('*').eq('room_id', initialRoom.id).order('turn_number')
+    if (data) setTurns(data)
+    await supabase.from('story_turns').update({ is_visible: true }).eq('room_id', initialRoom.id)
+    await supabase.from('rooms').update({ status: 'finished' }).eq('id', initialRoom.id)
     setPhase('revealing')
-  }, [supabase, initialRoom.id, fetchTurns])
+  }, [supabase, initialRoom.id])
 
-  const handleRevealComplete = useCallback(() => {
-    setPhase('results')
-  }, [])
+  const handleRevealComplete = useCallback(() => setPhase('results'), [])
 
   if (phase === 'waiting') {
     return <WaitingRoom room={room} currentUserId={currentUserId} />
   }
-
   if (phase === 'playing') {
-    return (
-      <GameRoom
-        room={room}
-        currentUserId={currentUserId}
-        players={players}
-        onGameEnd={handleGameEnd}
-      />
-    )
+    return <GameRoom room={room} currentUserId={currentUserId} players={players} onGameEnd={handleGameEnd} />
   }
-
   if (phase === 'revealing') {
     return <StoryReveal turns={turns} onRevealComplete={handleRevealComplete} />
   }
-
   return (
     <ResultsPanel
       roomId={initialRoom.id}
@@ -123,7 +87,7 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
       turns={turns}
       players={players}
       currentUserId={currentUserId}
-      nickname={myPlayer?.nickname || ''}
+      nickname={myPlayer?.nickname || nickname}
       isHost={myPlayer?.is_host ?? false}
     />
   )
