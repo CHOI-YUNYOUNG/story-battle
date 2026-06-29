@@ -13,29 +13,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '필수값 누락' }, { status: 400 })
   }
 
-  // Step 1: OpenAI 이미지 생성 (URL 형식)
-  let imageUrl = ''
+  // Step 1: OpenAI 이미지 생성 (gpt-image-1)
+  let buffer: Buffer
   try {
     const response = await openai.images.generate({
-      model: 'dall-e-3',
+      model: 'gpt-image-1',
       prompt: DRAW_PROMPT(word),
       n: 1,
       size: '1024x1024',
-      quality: 'standard',
+      quality: 'low',
     })
-    imageUrl = response.data?.[0]?.url ?? ''
-    if (!imageUrl) throw new Error('빈 응답')
+
+    const item = response.data?.[0]
+    if (item?.b64_json) {
+      buffer = Buffer.from(item.b64_json, 'base64')
+    } else if (item?.url) {
+      const imgRes = await fetch(item.url)
+      buffer = Buffer.from(await imgRes.arrayBuffer())
+    } else {
+      throw new Error('빈 응답')
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('OpenAI error:', msg)
     return NextResponse.json({ error: `OpenAI 실패: ${msg}` }, { status: 500 })
   }
 
-  // Step 2: 이미지 다운로드 후 Supabase Storage 업로드 (URL은 1시간 후 만료되므로)
+  // Step 2: Supabase Storage 업로드
   const supabase = createAdminClient()
   const filePath = `${roomId}/${turnNumber}.png`
-  const imgRes = await fetch(imageUrl)
-  const buffer = Buffer.from(await imgRes.arrayBuffer())
 
   const { error: uploadError } = await supabase.storage
     .from('story-images')
