@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
+import Image from 'next/image'
 import type { StoryTurn } from '@/types'
 
 interface StoryRevealProps {
@@ -21,66 +22,72 @@ export default function StoryReveal({ turns, onRevealComplete }: StoryRevealProp
         if (i >= turns.length) {
           clearInterval(interval)
           setDone(true)
-          setTimeout(onRevealComplete, 1500)
+          setTimeout(onRevealComplete, 2000)
           return
         }
         revealedRef.current = [...revealedRef.current, i]
         setRevealed([...revealedRef.current])
         i++
-      }, 800)
-    }, 1000)
+      }, 1000)
+    }, 1200)
     return () => clearTimeout(timer)
   }, [turns.length, onRevealComplete])
 
   return (
-    <div className="min-h-screen bg-deep-navy flex flex-col items-center justify-start p-4 pt-12">
-      <div className="w-full max-w-2xl">
+    <div className="min-h-screen bg-deep-navy flex flex-col items-center p-4 pt-12">
+      <div className="w-full max-w-lg">
         {!isRevealing && (
           <div className="text-center py-20 animate-pulse">
-            <div className="text-6xl mb-4">📖</div>
-            <h2 className="text-2xl font-serif text-gold">이야기를 공개합니다...</h2>
+            <div className="text-6xl mb-4">🎭</div>
+            <h2 className="text-2xl font-serif text-gold">그림 일지를 공개합니다...</h2>
           </div>
         )}
 
         {isRevealing && (
           <>
             <h2 className="text-2xl font-serif text-gold text-center mb-8">
-              {done ? '✨ 완성된 이야기' : '📖 공개 중...'}
+              {done ? '✨ 완성된 그림 일지' : '📖 공개 중...'}
             </h2>
-            <div className="space-y-4">
+            <div className="space-y-3">
               {turns.map((turn, idx) => (
                 <div
                   key={turn.id}
-                  className={`transform transition-all duration-700 ${
-                    revealed.includes(idx)
-                      ? 'opacity-100 translate-y-0'
-                      : 'opacity-0 translate-y-4'
+                  className={`transform transition-all duration-600 ${
+                    revealed.includes(idx) ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
                   }`}
                 >
-                  <div className={`relative rounded-2xl p-5 border ${
-                    turn.author_type === 'ai'
-                      ? 'bg-purple-900/20 border-purple-700/40'
-                      : 'bg-blue-900/20 border-blue-700/40'
-                  }`}>
-                    {/* Card flip effect overlay */}
-                    {revealed.includes(idx) && (
-                      <div className={`absolute inset-0 rounded-2xl animate-flip-in pointer-events-none ${
-                        turn.author_type === 'ai' ? 'bg-purple-500/10' : 'bg-blue-500/10'
-                      }`} />
-                    )}
-
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-lg">{idx + 1}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        turn.author_type === 'ai'
-                          ? 'bg-purple-700/60 text-purple-100'
-                          : 'bg-blue-700/60 text-blue-100'
-                      }`}>
-                        {turn.author_type === 'ai' ? '🤖 AI 작가' : `👤 ${turn.author_nickname}`}
+                  {turn.author_type === 'human' ? (
+                    // 사람 턴 - 단어 카드
+                    <div className="bg-blue-900/20 border border-blue-700/40 rounded-2xl px-5 py-4 flex items-center gap-3">
+                      <span className="text-blue-300 text-xs bg-blue-900/40 px-2 py-0.5 rounded-full whitespace-nowrap">
+                        👤 {turn.author_nickname}
+                      </span>
+                      <span className="text-white font-serif text-xl font-semibold">
+                        &ldquo;{turn.content}&rdquo;
                       </span>
                     </div>
-                    <p className="text-gray-100 font-serif leading-relaxed text-lg">{turn.content}</p>
-                  </div>
+                  ) : (
+                    // AI 턴 - 그림 카드
+                    <div className="bg-purple-900/20 border border-purple-700/40 rounded-2xl p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-purple-300 text-xs bg-purple-900/40 px-2 py-0.5 rounded-full">
+                          🤖 AI 화가
+                        </span>
+                        <span className="text-gray-500 text-xs">&ldquo;{turn.content}&rdquo; 그리기 도전</span>
+                      </div>
+                      {turn.image_url && (
+                        <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-white">
+                          <Image
+                            src={turn.image_url}
+                            alt={`AI가 그린 ${turn.content}`}
+                            fill
+                            className="object-contain"
+                            unoptimized
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -31,7 +31,8 @@ export type StoryTurn = {
   author_type: 'human' | 'ai'
   author_id: string | null
   author_nickname: string | null
-  content: string
+  content: string         // human 턴: 작성한 단어/문장, ai 턴: 그린 대상 단어
+  image_url: string | null // ai 턴에만 사용
   is_visible: boolean
   created_at: string
 }

@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
 import Timer from '@/components/ui/Timer'
 import type { Room, RoomPlayer, StoryTurn } from '@/types'
+import Image from 'next/image'
 
 interface GameRoomProps {
   room: Room
@@ -19,16 +20,19 @@ export default function GameRoom({ room, currentUserId, players, onGameEnd }: Ga
   const [timerKey, setTimerKey] = useState(0)
   const supabase = createClient()
 
+  // 총 턴: 플레이어수 × 4 (사람 2회 + AI 2회씩)
   const totalTurns = players.length * 4
   const currentTurnNumber = turns.length
-  const isAiTurn = currentTurnNumber % 2 === 1
+  const isAiTurn = currentTurnNumber % 2 === 1   // 홀수 = AI 그림
   const humanTurnIndex = Math.floor(currentTurnNumber / 2)
   const currentPlayerIndex = humanTurnIndex % players.length
   const currentPlayer = players[currentPlayerIndex]
   const isMyTurn = !isAiTurn && currentPlayer?.user_id === currentUserId
-  const lastTurn = turns[turns.length - 1]
-  const isLastTurn = currentTurnNumber === totalTurns - 1
   const gameOver = currentTurnNumber >= totalTurns
+
+  // 내가 볼 수 있는 이전 턴 (바로 직전 AI 그림)
+  const prevAiTurn = turns.filter(t => t.author_type === 'ai').at(-1) ?? null
+  const isFirstTurn = currentTurnNumber === 0
 
   const fetchTurns = useCallback(async () => {
     const { data } = await supabase
@@ -39,24 +43,18 @@ export default function GameRoom({ room, currentUserId, players, onGameEnd }: Ga
     if (data) setTurns(data)
   }, [supabase, room.id])
 
-  // Trigger AI turn
-  const triggerAiTurn = useCallback(async (prevContent: string, turnNum: number) => {
+  const triggerAiDraw = useCallback(async (word: string, turnNum: number) => {
     setAiLoading(true)
     try {
-      await fetch('/api/ai-turn', {
+      await fetch('/api/ai-draw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId: room.id,
-          turnNumber: turnNum,
-          previousContent: prevContent,
-          isLastTurn: turnNum === totalTurns - 1,
-        }),
+        body: JSON.stringify({ roomId: room.id, turnNumber: turnNum, word }),
       })
     } finally {
       setAiLoading(false)
     }
-  }, [room.id, totalTurns])
+  }, [room.id])
 
   useEffect(() => {
     fetchTurns()
@@ -71,60 +69,47 @@ export default function GameRoom({ room, currentUserId, players, onGameEnd }: Ga
         setTurns(prev => {
           const exists = prev.find(t => t.id === payload.new.id)
           if (exists) return prev
-          const newTurns = [...prev, payload.new as StoryTurn]
-          return newTurns.sort((a, b) => a.turn_number - b.turn_number)
+          return [...prev, payload.new as StoryTurn].sort((a, b) => a.turn_number - b.turn_number)
         })
         setTimerKey(k => k + 1)
       })
       .subscribe()
-
     return () => { supabase.removeChannel(channel) }
   }, [room.id, supabase, fetchTurns])
 
-  // Check if AI should take its turn
+  // AI 턴 자동 트리거 (첫 번째 플레이어만 실행해서 중복 방지)
   useEffect(() => {
-    if (gameOver) {
-      onGameEnd()
-      return
-    }
-
+    if (gameOver) { onGameEnd(); return }
     if (!isAiTurn) return
+    if (players[0]?.user_id !== currentUserId) return
 
-    // Only the first player triggers AI (to avoid duplicates)
-    const firstPlayer = players[0]
-    if (firstPlayer?.user_id !== currentUserId) return
-
-    // Check if AI turn already exists
-    const aiTurnExists = turns.find(t => t.turn_number === currentTurnNumber)
-    if (aiTurnExists) return
+    const alreadyExists = turns.find(t => t.turn_number === currentTurnNumber)
+    if (alreadyExists) return
 
     const prevTurn = turns[currentTurnNumber - 1]
     if (!prevTurn) return
 
-    triggerAiTurn(prevTurn.content, currentTurnNumber)
-  }, [isAiTurn, currentTurnNumber, turns, currentUserId, players, gameOver, onGameEnd, triggerAiTurn])
+    triggerAiDraw(prevTurn.content, currentTurnNumber)
+  }, [isAiTurn, currentTurnNumber, turns, currentUserId, players, gameOver, onGameEnd, triggerAiDraw])
 
   const handleSubmit = async () => {
-    if (myText.trim().length < 20) return alert('최소 20자 이상 작성해주세요')
-    if (myText.trim().length > 200) return alert('200자 이내로 작성해주세요')
-    if (!isMyTurn) return
-
+    if (!myText.trim()) return
+    if (myText.trim().length < 1) return
     setSubmitting(true)
     try {
-      const { error } = await supabase.from('story_turns').insert({
+      await supabase.from('story_turns').insert({
         room_id: room.id,
         turn_number: currentTurnNumber,
         author_type: 'human',
         author_id: currentUserId,
         author_nickname: currentPlayer?.nickname,
         content: myText.trim(),
+        image_url: null,
         is_visible: false,
       })
-      if (error) throw error
       setMyText('')
     } catch (err) {
       console.error(err)
-      alert('제출 실패')
     } finally {
       setSubmitting(false)
     }
@@ -132,129 +117,116 @@ export default function GameRoom({ room, currentUserId, players, onGameEnd }: Ga
 
   const handleTimeout = useCallback(async () => {
     if (!isMyTurn || submitting) return
-    // Auto-submit a placeholder on timeout
-    const text = myText.trim() || '...(시간 초과)'
-    const submitText = text.length < 20 ? text + ' 그리고 이야기는 계속되었다.' : text
+    const fallback = myText.trim() || '???'
     await supabase.from('story_turns').insert({
       room_id: room.id,
       turn_number: currentTurnNumber,
       author_type: 'human',
       author_id: currentUserId,
       author_nickname: currentPlayer?.nickname,
-      content: submitText,
+      content: fallback,
+      image_url: null,
       is_visible: false,
     })
     setMyText('')
   }, [isMyTurn, submitting, myText, supabase, room.id, currentTurnNumber, currentUserId, currentPlayer])
 
   const progressPct = (currentTurnNumber / totalTurns) * 100
+  const roundNum = Math.floor(humanTurnIndex / players.length) + 1
+  const totalRounds = 2
 
   return (
     <div className="min-h-screen bg-deep-navy flex flex-col">
-      {/* Header */}
+      {/* 헤더 */}
       <div className="border-b border-navy-700 px-4 py-3 flex items-center justify-between">
-        <div className="text-gold font-serif text-lg">이야기 대결</div>
+        <div className="text-gold font-serif text-lg">🎨 그림 대결</div>
         <div className="flex items-center gap-4">
-          <span className="text-gray-400 text-sm">
-            {Math.floor(currentTurnNumber / 2) + 1} / {Math.floor(totalTurns / 2)} 턴
-          </span>
+          <span className="text-gray-400 text-sm">{roundNum}/{totalRounds} 라운드</span>
           {isMyTurn && (
             <Timer key={timerKey} seconds={90} onExpire={handleTimeout} isActive={isMyTurn && !submitting} />
           )}
         </div>
       </div>
 
-      {/* Progress */}
+      {/* 진행 바 */}
       <div className="h-1 bg-navy-800">
         <div className="h-full bg-gold transition-all duration-500" style={{ width: `${progressPct}%` }} />
       </div>
 
-      {/* Main area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-2xl mx-auto w-full">
+      {/* 메인 영역 */}
+      <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-2xl mx-auto w-full gap-6">
 
-        {/* Previous turn preview */}
-        {lastTurn && (
-          <div className={`w-full mb-6 p-5 rounded-2xl border ${
-            lastTurn.author_type === 'ai'
-              ? 'bg-purple-900/20 border-purple-700/40'
-              : 'bg-blue-900/20 border-blue-700/40'
-          }`}>
-            <div className="flex items-center gap-2 mb-3">
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                lastTurn.author_type === 'ai'
-                  ? 'bg-purple-700/50 text-purple-200'
-                  : 'bg-blue-700/50 text-blue-200'
-              }`}>
-                {lastTurn.author_type === 'ai' ? '🤖 AI 작가' : `👤 ${lastTurn.author_nickname}`}
-              </span>
-              <span className="text-gray-500 text-xs">이전 내용</span>
-            </div>
-            <p className="text-gray-200 font-serif leading-relaxed">{lastTurn.content}</p>
-          </div>
-        )}
-
-        {/* AI Loading */}
+        {/* AI 그림 로딩 */}
         {isAiTurn && aiLoading && (
-          <div className="w-full text-center py-12">
-            <div className="inline-flex items-center gap-3 text-purple-300">
-              <div className="flex gap-1">
-                {[0, 1, 2].map(i => (
-                  <div key={i} className="w-2 h-2 rounded-full bg-purple-400 animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s` }} />
-                ))}
-              </div>
-              <span className="font-serif text-lg">AI가 이야기를 이어쓰는 중...</span>
+          <div className="w-full text-center py-16">
+            <div className="inline-flex flex-col items-center gap-4 text-purple-300">
+              <div className="w-20 h-20 border-4 border-purple-500/30 border-t-purple-400 rounded-full animate-spin" />
+              <span className="font-serif text-lg">AI가 그림을 그리는 중...</span>
+              <span className="text-gray-500 text-sm">얼마나 못 그릴지 기대해봐요 🖌️</span>
             </div>
           </div>
         )}
 
-        {/* Waiting for other player */}
+        {/* 다른 플레이어 차례 대기 */}
         {!isAiTurn && !isMyTurn && !gameOver && (
-          <div className="w-full text-center py-12">
-            <div className="text-gray-400">
-              <div className="text-4xl mb-3">✍️</div>
-              <p className="font-serif text-lg text-gray-300">
-                <span className="text-gold">{currentPlayer?.nickname}</span> 님이 이야기를 쓰고 있습니다...
-              </p>
-            </div>
+          <div className="w-full text-center py-16">
+            <div className="text-4xl mb-4">✏️</div>
+            <p className="font-serif text-lg text-gray-300">
+              <span className="text-gold">{currentPlayer?.nickname}</span> 님이 단어를 쓰고 있습니다...
+            </p>
           </div>
         )}
 
-        {/* My turn - text input */}
+        {/* 내 차례 */}
         {isMyTurn && !gameOver && (
-          <div className="w-full space-y-4">
+          <div className="w-full space-y-5">
+            {/* 이전 AI 그림 표시 (첫 번째 턴 제외) */}
+            {!isFirstTurn && prevAiTurn?.image_url && (
+              <div className="w-full">
+                <p className="text-gray-400 text-sm mb-2 text-center">
+                  🖼️ AI가 그린 그림 — 무엇을 그린 걸까요?
+                </p>
+                <div className="relative w-full aspect-square max-w-sm mx-auto rounded-2xl overflow-hidden border-2 border-purple-700/40 bg-white">
+                  <Image
+                    src={prevAiTurn.image_url}
+                    alt="AI 그림"
+                    fill
+                    className="object-contain"
+                    unoptimized
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 텍스트 입력 */}
             <div className="text-center">
-              <span className="text-gold font-serif text-xl">✨ 당신의 차례입니다!</span>
-              {turns.length === 0 && (
-                <p className="text-gray-400 text-sm mt-1">첫 번째 이야기를 시작해보세요</p>
+              <span className="text-gold font-serif text-xl">
+                {isFirstTurn ? '✨ 첫 번째 단어를 입력해주세요!' : '🤔 이 그림은 무엇일까요?'}
+              </span>
+              {isFirstTurn && (
+                <p className="text-gray-500 text-sm mt-1">AI가 이 단어를 그림으로 표현합니다</p>
               )}
             </div>
-            <div className="relative">
-              <textarea
+
+            <div className="flex gap-2">
+              <input
                 value={myText}
                 onChange={e => setMyText(e.target.value)}
-                maxLength={200}
-                rows={5}
-                placeholder={turns.length === 0 ? "이야기를 시작해보세요..." : "이야기를 이어써보세요..."}
-                className="w-full bg-navy-800 border border-navy-600 rounded-xl p-4 text-white font-serif text-lg resize-none focus:outline-none focus:border-gold/60 placeholder-gray-600"
+                onKeyDown={e => e.key === 'Enter' && !submitting && myText.trim() && handleSubmit()}
+                placeholder={isFirstTurn ? '예: 고양이, 우주선, 떡볶이...' : '그림이 뭔지 입력해보세요'}
+                maxLength={50}
+                className="flex-1 bg-navy-800 border border-navy-600 rounded-xl px-4 py-3 text-white text-lg focus:outline-none focus:border-gold/60 placeholder-gray-600"
+                autoFocus
               />
-              <div className={`absolute bottom-3 right-3 text-xs ${
-                myText.length < 20 ? 'text-red-400' :
-                myText.length > 180 ? 'text-yellow-400' : 'text-gray-500'
-              }`}>
-                {myText.length}/200
-              </div>
+              <button
+                onClick={handleSubmit}
+                disabled={submitting || !myText.trim()}
+                className="btn-gold px-6 py-3 text-lg disabled:opacity-40 whitespace-nowrap"
+              >
+                {submitting ? '...' : '제출'}
+              </button>
             </div>
-            {myText.length > 0 && myText.length < 20 && (
-              <p className="text-red-400 text-sm">최소 20자 이상 작성해주세요 ({20 - myText.length}자 더)</p>
-            )}
-            <button
-              onClick={handleSubmit}
-              disabled={submitting || myText.trim().length < 20}
-              className="btn-gold w-full py-3 text-lg disabled:opacity-40"
-            >
-              {submitting ? '제출 중...' : isLastTurn ? '📖 이야기 마무리하기' : '제출하기'}
-            </button>
+            <p className="text-gray-600 text-xs text-center">Enter 또는 제출 버튼</p>
           </div>
         )}
       </div>

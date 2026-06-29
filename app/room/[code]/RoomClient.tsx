@@ -57,8 +57,13 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
       }, (payload) => {
         const updated = payload.new as Room
         setRoom(updated)
+        if (updated.status === 'waiting') {
+          // 방 리셋 → 대기실로
+          setTurns([])
+          setPhase('waiting')
+        }
         if (updated.status === 'playing') setPhase('playing')
-        if (updated.status === 'voting' || updated.status === 'finished') {
+        if (updated.status === 'finished') {
           fetchTurns().then(() => setPhase('results'))
         }
       })
@@ -75,7 +80,6 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
 
   const handleGameEnd = useCallback(async () => {
     await fetchTurns()
-    // Reveal all turns
     await supabase
       .from('story_turns')
       .update({ is_visible: true })
@@ -83,7 +87,7 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
 
     await supabase
       .from('rooms')
-      .update({ status: 'voting' })
+      .update({ status: 'finished' })
       .eq('id', initialRoom.id)
 
     setPhase('revealing')
@@ -115,10 +119,12 @@ export default function RoomClient({ initialRoom, currentUserId }: RoomClientPro
   return (
     <ResultsPanel
       roomId={initialRoom.id}
+      roomCode={initialRoom.code}
       turns={turns}
       players={players}
       currentUserId={currentUserId}
       nickname={myPlayer?.nickname || ''}
+      isHost={myPlayer?.is_host ?? false}
     />
   )
 }
